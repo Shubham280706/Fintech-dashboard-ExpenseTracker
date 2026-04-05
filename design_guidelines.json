@@ -1,0 +1,77 @@
+{
+  "theme": "light",
+  "archetype": "Swiss & High-Contrast with Pop Accents",
+  "rationale": "For a fintech dashboard, users need absolute clarity and trust, achieved through a stark white/off-white background and sharp 1px borders. To fulfill the 'pop colours' requirement, we introduce highly saturated accent colors (Mint, Coral, Indigo, Pink) exclusively for data visualization, badges, and primary calls-to-action.",
+  "colors": {
+    "background": "#F8F9FA",
+    "surface": "#FFFFFF",
+    "border": "#E5E7EB",
+    "text_primary": "#111827",
+    "text_secondary": "#6B7280",
+    "primary": "#4F46E5",
+    "pop_accents": {
+      "positive_growth": "#10B981",
+      "negative_decline": "#F43F5E",
+      "warning": "#F59E0B",
+      "chart_1": "#4F46E5",
+      "chart_2": "#0EA5E9",
+      "chart_3": "#EC4899",
+      "chart_4": "#F97316"
+    }
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "scale": {
+      "h1": "text-4xl font-bold tracking-tight",
+      "h2": "text-2xl font-semibold tracking-tight",
+      "h3": "text-xl font-medium",
+      "h4": "text-lg font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm font-medium",
+      "tiny_label": "text-xs font-bold uppercase tracking-[0.2em]"
+    }
+  },
+  "layout": {
+    "spacing_system": "Generous padding inside containers (p-6 or p-8). Container gaps using gap-6.",
+    "grid_strategy": "Control Room Grid (Dense). grid-cols-1 md:grid-cols-3 lg:grid-cols-4 for main dashboard.",
+    "surface_treatment": "Subtle Roundness. Max 8px border-radius (rounded-lg). Flat solid white backgrounds with 1px border-gray-200. NO heavy shadows, only shadow-sm on hover for interactive cards.",
+    "alignment": "Left-align dense content and numbers. Top-right for actions/filters in widgets."
+  },
+  "components": {
+    "buttons": "Solid primary color for main CTA. White background with 1px border for secondary. Add hover state with slight brightness increase or text color change. Rounded-lg.",
+    "cards": "bg-white border border-gray-200 rounded-lg p-6. Must have explicit structure for header and content.",
+    "tables": "Shadcn Table. Left align text, right align amounts. Positive amounts in text-emerald-500, negative in text-gray-900.",
+    "charts": "Shadcn charts (Recharts) using the pop_accents palette. Minimal grid lines, no complex axis ticks.",
+    "inputs": "Shadcn standard inputs. focus:ring-2 focus:ring-indigo-500."
+  },
+  "motion": {
+    "hover": "Subtle transform (-translate-y-1) and shadow-sm on clickable cards.",
+    "transitions": "transition-all duration-200 ease-in-out for buttons and inputs."
+  },
+  "icons_and_assets": {
+    "icon_library": "lucide-react",
+    "images": {
+      "user_avatar": {
+        "url": "https://images.unsplash.com/photo-1634162635368-004f5fb27427?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjB1c2VyJTIwcHJvZmlsZSUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NTM3ODg1MXww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional user profile portrait for the top navigation or profile dropdown."
+      },
+      "empty_state_graphic": {
+        "url": "https://images.unsplash.com/photo-1747843968777-9522754c3c2c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTF8MHwxfHNlYXJjaHwzfHxtaW5pbWFsJTIwYWJzdHJhY3QlMjAzZCUyMHNoYXBlcyUyMG9uJTIwd2hpdGUlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NTM3ODg1MXww&ixlib=rb-4.1.0&q=85",
+        "description": "Minimal abstract 3d shape for use in empty states (e.g. 'No transactions yet')."
+      }
+    }
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure all pop colors meet 3:1 contrast against white background for large text/icons, and 4.5:1 for normal text.",
+    "testing_attributes": "All interactive elements MUST include a data-testid attribute in kebab-case (e.g. data-testid='transfer-submit-button', data-testid='transaction-filter-select')."
+  },
+  "instructions_to_main_agent": [
+    "Use standard HTML + Tailwind for page layouts and grid wrappers, but heavily utilize Shadcn for functional components (Select, Dialog, Tabs, Table).",
+    "Keep border-radius to a maximum of 8px (rounded-lg) across all components to maintain a structured, professional fintech look.",
+    "Use the pop_accents colors strictly for data visualization (charts) and status badges (success/warning/error). Keep the rest of the UI monochrome (white/gray) with Indigo for primary actions.",
+    "Implement the Alpha Vantage stock integration with a clear, minimal chart layout. Use Recharts via Shadcn.",
+    "For the transaction table, ensure it is responsive and uses the defined typographic scale for amounts.",
+    "Google OAuth login button should be prominent and styled neutrally (white with border and Google logo icon)."
+  ]
+}
