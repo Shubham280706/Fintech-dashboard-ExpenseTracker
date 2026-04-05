@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, createContext, useContext } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Toaster, toast } from "sonner";
 import {
@@ -51,7 +51,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSeparator,
 } from "./components/ui/dropdown-menu";
 import { Calendar } from "./components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
@@ -78,6 +77,39 @@ import { format } from "date-fns";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+const AUTH_TOKEN_KEY = "moneyhub_session_token";
+
+const getStoredSessionToken = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.localStorage.getItem(AUTH_TOKEN_KEY);
+};
+
+const storeSessionToken = (sessionToken) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (sessionToken) {
+    window.localStorage.setItem(AUTH_TOKEN_KEY, sessionToken);
+  }
+};
+
+const clearSessionToken = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(AUTH_TOKEN_KEY);
+};
+
+const getAuthConfig = () => {
+  const sessionToken = getStoredSessionToken();
+  return {
+    withCredentials: true,
+    headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
+  };
+};
 
 // Auth Context
 const AuthContext = createContext(null);
@@ -95,19 +127,11 @@ const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const checkAuth = useCallback(async () => {
-    // CRITICAL: If returning from OAuth callback, skip the /me check.
-    // AuthCallback will exchange the session_id and establish the session first.
-    if (window.location.hash?.includes("session_id=")) {
-      setLoading(false);
-      return;
-    }
-
     try {
-      const response = await axios.get(`${API}/auth/me`, {
-        withCredentials: true,
-      });
+      const response = await axios.get(`${API}/auth/me`, getAuthConfig());
       setUser(response.data);
     } catch (error) {
+      clearSessionToken();
       setUser(null);
     } finally {
       setLoading(false);
@@ -120,10 +144,11 @@ const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      await axios.post(`${API}/auth/logout`, {}, getAuthConfig());
     } catch (error) {
       console.error("Logout error:", error);
     }
+    clearSessionToken();
     setUser(null);
   };
 
@@ -134,63 +159,16 @@ const AuthProvider = ({ children }) => {
   );
 };
 
-// Auth Callback Component
-const AuthCallback = () => {
-  const hasProcessed = useRef(false);
-  const navigate = useNavigate();
-  const { setUser } = useAuth();
-  const location = useLocation();
-
-  useEffect(() => {
-    if (hasProcessed.current) return;
-    hasProcessed.current = true;
-
-    const processAuth = async () => {
-      const hash = location.hash;
-      const sessionIdMatch = hash.match(/session_id=([^&]+)/);
-
-      if (sessionIdMatch) {
-        const sessionId = sessionIdMatch[1];
-        try {
-          const response = await axios.post(
-            `${API}/auth/session`,
-            { session_id: sessionId },
-            { withCredentials: true }
-          );
-          setUser(response.data);
-          toast.success(`Welcome, ${response.data.name}!`);
-          navigate("/dashboard", { replace: true, state: { user: response.data } });
-        } catch (error) {
-          console.error("Auth error:", error);
-          toast.error("Authentication failed. Please try again.");
-          navigate("/", { replace: true });
-        }
-      } else {
-        navigate("/", { replace: true });
-      }
-    };
-
-    processAuth();
-  }, [location, navigate, setUser]);
-
-  return (
-    <div className="loading-spinner" style={{ minHeight: "100vh" }}>
-      <div className="spinner"></div>
-    </div>
-  );
-};
-
 // Protected Route
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
-  const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!loading && !user && !location.state?.user) {
+    if (!loading && !user) {
       navigate("/", { replace: true });
     }
-  }, [user, loading, navigate, location]);
+  }, [user, loading, navigate]);
 
   if (loading) {
     return (
@@ -200,7 +178,7 @@ const ProtectedRoute = ({ children }) => {
     );
   }
 
-  if (!user && !location.state?.user) {
+  if (!user) {
     return null;
   }
 
@@ -209,8 +187,15 @@ const ProtectedRoute = ({ children }) => {
 
 // Landing Page
 const LandingPage = () => {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
   const navigate = useNavigate();
+  const [mode, setMode] = useState("login");
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -218,10 +203,43 @@ const LandingPage = () => {
     }
   }, [user, navigate]);
 
-  const handleLogin = () => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  const updateField = (field) => (event) => {
+    setFormData((current) => ({ ...current, [field]: event.target.value }));
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    if (!formData.email || !formData.password || (mode === "register" && !formData.name)) {
+      toast.error("Please fill in all required fields.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const endpoint = mode === "login" ? "login" : "register";
+      const payload =
+        mode === "login"
+          ? { email: formData.email, password: formData.password }
+          : formData;
+
+      const response = await axios.post(`${API}/auth/${endpoint}`, payload, {
+        withCredentials: true,
+      });
+
+      storeSessionToken(response.data.session_token);
+      setUser(response.data);
+      toast.success(
+        mode === "login"
+          ? `Welcome back, ${response.data.name}!`
+          : `Account created for ${response.data.name}!`
+      );
+      navigate("/dashboard", { replace: true });
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Authentication failed. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -233,31 +251,22 @@ const LandingPage = () => {
           </div>
           <span className="sidebar-logo-text">MoneyHub</span>
         </div>
-        <Button
-          data-testid="login-btn"
-          onClick={handleLogin}
-          className="btn-google"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path
-              fill="#4285F4"
-              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-            />
-            <path
-              fill="#34A853"
-              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-            />
-            <path
-              fill="#FBBC05"
-              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-            />
-            <path
-              fill="#EA4335"
-              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-            />
-          </svg>
-          Sign in with Google
-        </Button>
+        <div className="landing-auth-switch">
+          <button
+            type="button"
+            className={`auth-switch-btn ${mode === "login" ? "active" : ""}`}
+            onClick={() => setMode("login")}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            className={`auth-switch-btn ${mode === "register" ? "active" : ""}`}
+            onClick={() => setMode("register")}
+          >
+            Create Account
+          </button>
+        </div>
       </nav>
 
       <div className="landing-hero">
@@ -269,7 +278,8 @@ const LandingPage = () => {
           </h1>
           <p className="hero-subtitle">
             Track transactions, manage budgets, monitor markets, and take control
-            of your financial future with our powerful yet simple dashboard.
+            of your financial future with a first-party dashboard that manages its
+            own secure sign-in.
           </p>
           <div className="hero-features">
             <div className="feature-badge">
@@ -285,15 +295,78 @@ const LandingPage = () => {
               <Check size={16} /> Export Reports
             </div>
           </div>
-          <Button
-            data-testid="get-started-btn"
-            onClick={handleLogin}
-            className="btn-primary"
-            style={{ padding: "1rem 2rem", fontSize: "1rem" }}
-          >
-            Get Started Free
-            <ArrowUpRight size={18} />
-          </Button>
+          <div className="auth-card" data-testid="auth-card">
+            <div className="auth-card-header">
+              <p className="auth-eyebrow">Built-in authentication</p>
+              <h2 className="auth-title">
+                {mode === "login" ? "Welcome back" : "Create your account"}
+              </h2>
+              <p className="auth-description">
+                {mode === "login"
+                  ? "Use your MoneyHub email and password to open the dashboard."
+                  : "Create a local account and we will set up your starter financial data."}
+              </p>
+            </div>
+
+            <form className="auth-form" onSubmit={handleSubmit}>
+              {mode === "register" && (
+                <div className="form-group">
+                  <Label className="form-label" htmlFor="name">
+                    Full Name
+                  </Label>
+                  <Input
+                    id="name"
+                    placeholder="Aarav Mehta"
+                    value={formData.name}
+                    onChange={updateField("name")}
+                    data-testid="register-name-input"
+                  />
+                </div>
+              )}
+
+              <div className="form-group">
+                <Label className="form-label" htmlFor="email">
+                  Email
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={formData.email}
+                  onChange={updateField("email")}
+                  data-testid="auth-email-input"
+                />
+              </div>
+
+              <div className="form-group">
+                <Label className="form-label" htmlFor="password">
+                  Password
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="At least 8 characters"
+                  value={formData.password}
+                  onChange={updateField("password")}
+                  data-testid="auth-password-input"
+                />
+              </div>
+
+              <Button
+                type="submit"
+                className="btn-primary auth-submit"
+                disabled={submitting}
+                data-testid={mode === "login" ? "login-btn" : "register-btn"}
+              >
+                {submitting
+                  ? "Please wait..."
+                  : mode === "login"
+                    ? "Sign In"
+                    : "Create Account"}
+                <ArrowUpRight size={18} />
+              </Button>
+            </form>
+          </div>
         </div>
         <div
           style={{
@@ -1340,10 +1413,10 @@ const Dashboard = () => {
   const fetchData = useCallback(async () => {
     try {
       const [statsRes, txnRes, budgetRes, alertRes] = await Promise.all([
-        axios.get(`${API}/dashboard/stats`, { withCredentials: true }),
-        axios.get(`${API}/transactions`, { withCredentials: true }),
-        axios.get(`${API}/budgets`, { withCredentials: true }),
-        axios.get(`${API}/alerts`, { withCredentials: true }),
+        axios.get(`${API}/dashboard/stats`, getAuthConfig()),
+        axios.get(`${API}/transactions`, getAuthConfig()),
+        axios.get(`${API}/budgets`, getAuthConfig()),
+        axios.get(`${API}/alerts`, getAuthConfig()),
       ]);
 
       setStats(statsRes.data);
@@ -1377,7 +1450,7 @@ const Dashboard = () => {
 
   const handleAddTransaction = async (data) => {
     try {
-      await axios.post(`${API}/transactions`, data, { withCredentials: true });
+      await axios.post(`${API}/transactions`, data, getAuthConfig());
       toast.success("Transaction added successfully");
       fetchData();
     } catch (error) {
@@ -1387,7 +1460,7 @@ const Dashboard = () => {
 
   const handleDeleteTransaction = async (id) => {
     try {
-      await axios.delete(`${API}/transactions/${id}`, { withCredentials: true });
+      await axios.delete(`${API}/transactions/${id}`, getAuthConfig());
       toast.success("Transaction deleted");
       fetchData();
     } catch (error) {
@@ -1397,7 +1470,7 @@ const Dashboard = () => {
 
   const handleAddBudget = async (data) => {
     try {
-      await axios.post(`${API}/budgets`, data, { withCredentials: true });
+      await axios.post(`${API}/budgets`, data, getAuthConfig());
       toast.success("Budget created successfully");
       fetchData();
     } catch (error) {
@@ -1407,7 +1480,7 @@ const Dashboard = () => {
 
   const handleDeleteBudget = async (id) => {
     try {
-      await axios.delete(`${API}/budgets/${id}`, { withCredentials: true });
+      await axios.delete(`${API}/budgets/${id}`, getAuthConfig());
       toast.success("Budget deleted");
       fetchData();
     } catch (error) {
@@ -1417,7 +1490,7 @@ const Dashboard = () => {
 
   const handleMarkAlertRead = async (id) => {
     try {
-      await axios.put(`${API}/alerts/${id}/read`, {}, { withCredentials: true });
+      await axios.put(`${API}/alerts/${id}/read`, {}, getAuthConfig());
       fetchData();
     } catch (error) {
       console.error("Error marking alert read:", error);
@@ -1426,7 +1499,7 @@ const Dashboard = () => {
 
   const handleMarkAllAlertsRead = async () => {
     try {
-      await axios.put(`${API}/alerts/read-all`, {}, { withCredentials: true });
+      await axios.put(`${API}/alerts/read-all`, {}, getAuthConfig());
       toast.success("All alerts marked as read");
       fetchData();
     } catch (error) {
@@ -1497,13 +1570,6 @@ const Dashboard = () => {
 
 // App Router
 function AppRouter() {
-  const location = useLocation();
-
-  // Check URL fragment for session_id (OAuth callback)
-  if (location.hash?.includes("session_id=")) {
-    return <AuthCallback />;
-  }
-
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />

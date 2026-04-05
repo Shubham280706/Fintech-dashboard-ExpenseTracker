@@ -6,7 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -14,6 +14,7 @@ import httpx
 from bs4 import BeautifulSoup
 import csv
 import io
+from passlib.context import CryptContext
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -35,6 +36,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ============== MODELS ==============
 
@@ -98,15 +100,20 @@ class StockData(BaseModel):
     change_percent: float
     volume: Optional[str] = None
 
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    name: str
+    password: str = Field(min_length=8)
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+
 # ============== AUTH HELPERS ==============
 
 async def get_current_user(request: Request) -> User:
     """Get current user from session token (cookie or header)"""
-    session_token = request.cookies.get("session_token")
-    if not session_token:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            session_token = auth_header.split(" ")[1]
+    session_token = get_session_token_from_request(request)
     
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -138,95 +145,118 @@ async def get_current_user(request: Request) -> User:
     
     return User(**user_doc)
 
-# ============== AUTH ENDPOINTS ==============
+def get_session_token_from_request(request: Request) -> Optional[str]:
+    session_token = request.cookies.get("session_token")
+    if session_token:
+        return session_token
 
-@api_router.post("/auth/session")
-async def create_session(request: Request, response: Response):
-    """Exchange session_id for session_token"""
-    body = await request.json()
-    session_id = body.get("session_id")
-    
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
-    
-    # Call Emergent Auth to get user data
-    async with httpx.AsyncClient() as client_http:
-        auth_response = await client_http.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id}
-        )
-        
-        if auth_response.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid session_id")
-        
-        user_data = auth_response.json()
-    
-    user_id = f"user_{uuid.uuid4().hex[:12]}"
-    email = user_data.get("email")
-    name = user_data.get("name")
-    picture = user_data.get("picture")
-    session_token = user_data.get("session_token")
-    
-    # Check if user exists
-    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
-    if existing_user:
-        user_id = existing_user["user_id"]
-    else:
-        # Create new user
-        new_user = {
-            "user_id": user_id,
-            "email": email,
-            "name": name,
-            "picture": picture,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(new_user)
-        
-        # Create sample data for new user
-        await create_sample_data(user_id)
-    
-    # Store session
-    session_doc = {
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header.split(" ")[1]
+
+    return None
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return pwd_context.verify(password, password_hash)
+
+async def create_user_session(user_id: str) -> str:
+    session_token = f"session_{uuid.uuid4().hex}"
+    await db.user_sessions.insert_one({
         "user_id": user_id,
         "session_token": session_token,
         "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.user_sessions.insert_one(session_doc)
-    
-    # Set cookie
+    })
+    return session_token
+
+def set_session_cookie(response: Response, request: Request, session_token: str):
+    is_secure = request.url.scheme == "https"
     response.set_cookie(
         key="session_token",
         value=session_token,
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=is_secure,
+        samesite="none" if is_secure else "lax",
         path="/",
         max_age=7 * 24 * 60 * 60
     )
-    
+
+def build_auth_response(user_doc: dict) -> dict:
     return {
-        "user_id": user_id,
-        "email": email,
-        "name": name,
-        "picture": picture
+        "user_id": user_doc["user_id"],
+        "email": user_doc["email"],
+        "name": user_doc["name"],
+        "picture": user_doc.get("picture"),
     }
+
+# ============== AUTH ENDPOINTS ==============
+
+@api_router.post("/auth/register")
+async def register(auth: RegisterRequest, request: Request, response: Response):
+    """Create a local account and session"""
+    email = auth.email.lower().strip()
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+
+    if existing_user and existing_user.get("password_hash"):
+        raise HTTPException(status_code=400, detail="An account with this email already exists")
+
+    if existing_user:
+        password_hash = hash_password(auth.password)
+        await db.users.update_one(
+            {"user_id": existing_user["user_id"]},
+            {"$set": {"name": auth.name.strip(), "password_hash": password_hash}}
+        )
+        user_doc = await db.users.find_one({"user_id": existing_user["user_id"]}, {"_id": 0})
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        user_doc = {
+            "user_id": user_id,
+            "email": email,
+            "name": auth.name.strip(),
+            "picture": None,
+            "password_hash": hash_password(auth.password),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.users.insert_one(user_doc)
+        await create_sample_data(user_id)
+
+    session_token = await create_user_session(user_doc["user_id"])
+    set_session_cookie(response, request, session_token)
+    payload = build_auth_response(user_doc)
+    payload["session_token"] = session_token
+    return payload
+
+@api_router.post("/auth/login")
+async def login(auth: LoginRequest, request: Request, response: Response):
+    """Authenticate an existing local account"""
+    email = auth.email.lower().strip()
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+
+    if not user_doc or not user_doc.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not verify_password(auth.password, user_doc["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    session_token = await create_user_session(user_doc["user_id"])
+    set_session_cookie(response, request, session_token)
+    payload = build_auth_response(user_doc)
+    payload["session_token"] = session_token
+    return payload
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
     """Get current authenticated user"""
     user = await get_current_user(request)
-    return {
-        "user_id": user.user_id,
-        "email": user.email,
-        "name": user.name,
-        "picture": user.picture
-    }
+    return build_auth_response(user.model_dump())
 
 @api_router.post("/auth/logout")
 async def logout(request: Request, response: Response):
     """Logout user"""
-    session_token = request.cookies.get("session_token")
+    session_token = get_session_token_from_request(request)
     if session_token:
         await db.user_sessions.delete_one({"session_token": session_token})
     
