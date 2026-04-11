@@ -7,8 +7,8 @@ This repo is set up to deploy as two Vercel projects from the same GitHub reposi
 
 ## Before you deploy
 
-Vercel cannot reach your local MongoDB at `mongodb://127.0.0.1:27017`.
-Use a hosted MongoDB database such as MongoDB Atlas and keep that connection string in Vercel environment variables.
+Vercel cannot reach your local Supabase stack.
+Use a hosted Supabase project and keep its project URL and service role key in Vercel environment variables.
 
 ## 1. Push the repo to GitHub
 
@@ -22,8 +22,8 @@ Make sure your latest code is on GitHub.
 4. Leave the install/build settings at their defaults
 5. Add these environment variables:
 
-   - `MONGO_URL`
-   - `DB_NAME`
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
    - `CORS_ORIGINS`
 
 6. Deploy
@@ -32,6 +32,7 @@ Notes:
 
 - `backend/api/index.py` is the Vercel Python entrypoint
 - `backend/.python-version` pins Python `3.13`
+- the backend uses Supabase tables for `users`, `user_sessions`, `transactions`, `budgets`, and `alerts`
 
 ## 3. Create the frontend Vercel project
 

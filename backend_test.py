@@ -7,11 +7,10 @@ Tests all endpoints including auth, transactions, budgets, stocks, alerts, and e
 import requests
 import sys
 import json
-import subprocess
 from datetime import datetime, timezone, timedelta
 
 class FintechAPITester:
-    def __init__(self, base_url="https://money-hub-72.preview.emergentagent.com"):
+    def __init__(self, base_url="http://127.0.0.1:8000"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.session_token = None
@@ -81,48 +80,33 @@ class FintechAPITester:
             return None
 
     def create_test_user_session(self):
-        """Create test user and session in MongoDB"""
+        """Create test user and session via the local auth API"""
         print("\n🔧 Creating test user and session...")
         
         timestamp = int(datetime.now().timestamp())
-        user_id = f"test-user-{timestamp}"
-        session_token = f"test_session_{timestamp}"
-        
-        mongo_script = f"""
-use('test_database');
-var userId = '{user_id}';
-var sessionToken = '{session_token}';
-db.users.insertOne({{
-  user_id: userId,
-  email: 'test.user.{timestamp}@example.com',
-  name: 'Test User',
-  picture: 'https://via.placeholder.com/150',
-  created_at: new Date()
-}});
-db.user_sessions.insertOne({{
-  user_id: userId,
-  session_token: sessionToken,
-  expires_at: new Date(Date.now() + 7*24*60*60*1000),
-  created_at: new Date()
-}});
-print('Session token: ' + sessionToken);
-print('User ID: ' + userId);
-"""
+        email = f"test.user.{timestamp}@example.com"
         
         try:
-            result = subprocess.run(['mongosh', '--eval', mongo_script], 
-                                  capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                self.session_token = session_token
-                self.user_id = user_id
-                print(f"✅ Test user created: {user_id}")
-                print(f"✅ Session token: {session_token}")
-                return True
-            else:
-                print(f"❌ Failed to create test user: {result.stderr}")
+            response = requests.post(
+                f"{self.api_url}/auth/register",
+                json={
+                    "name": "Test User",
+                    "email": email,
+                    "password": "Passw0rd!",
+                },
+                timeout=10,
+            )
+
+            if response.status_code != 200:
+                print(f"❌ Failed to create test user: {response.text}")
                 return False
-                
+
+            payload = response.json()
+            self.session_token = payload["session_token"]
+            self.user_id = payload["user_id"]
+            print(f"✅ Test user created: {self.user_id}")
+            print(f"✅ Session token: {self.session_token}")
+            return True
         except Exception as e:
             print(f"❌ Error creating test user: {e}")
             return False

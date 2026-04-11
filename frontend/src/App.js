@@ -190,6 +190,7 @@ const LandingPage = () => {
   const { user, setUser } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState("login");
+  const [navHidden, setNavHidden] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -202,6 +203,25 @@ const LandingPage = () => {
       navigate("/dashboard", { replace: true });
     }
   }, [user, navigate]);
+
+  useEffect(() => {
+    let lastScrollY = window.scrollY;
+
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      const scrollingDown = currentScrollY > lastScrollY;
+      const shouldHide = scrollingDown && currentScrollY > 96;
+
+      setNavHidden(shouldHide);
+      lastScrollY = currentScrollY;
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
 
   const updateField = (field) => (event) => {
     setFormData((current) => ({ ...current, [field]: event.target.value }));
@@ -236,7 +256,13 @@ const LandingPage = () => {
       );
       navigate("/dashboard", { replace: true });
     } catch (error) {
-      toast.error(error.response?.data?.detail || "Authentication failed. Please try again.");
+      if (!error.response) {
+        toast.error(
+          "Cannot reach the backend at http://localhost:8000. Start the backend and verify backend/.env has a valid Supabase service role key."
+        );
+      } else {
+        toast.error(error.response?.data?.detail || "Authentication failed. Please try again.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -244,7 +270,14 @@ const LandingPage = () => {
 
   return (
     <div className="landing-page">
-      <nav className="landing-nav">
+      <div
+        className={`landing-nav-reveal-zone ${navHidden ? "active" : ""}`}
+        onMouseEnter={() => setNavHidden(false)}
+      />
+      <nav
+        className={`landing-nav ${navHidden ? "hidden" : ""}`}
+        onMouseEnter={() => setNavHidden(false)}
+      >
         <div className="sidebar-logo">
           <div className="sidebar-logo-icon">
             <Wallet size={20} />
@@ -268,6 +301,7 @@ const LandingPage = () => {
           </button>
         </div>
       </nav>
+      <div className="landing-nav-spacer" />
 
       <div className="landing-hero">
         <div className="hero-content">

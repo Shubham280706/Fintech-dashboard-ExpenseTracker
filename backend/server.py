@@ -2,12 +2,11 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Query
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-from typing import List, Optional
+from typing import Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 import httpx
@@ -15,14 +14,18 @@ from bs4 import BeautifulSoup
 import csv
 import io
 from passlib.context import CryptContext
+from supabase import create_client, Client
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+
+if not supabase_url or not supabase_key:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) are required")
+
+db: Client = create_client(supabase_url, supabase_key)
 
 # Create the main app
 app = FastAPI()
@@ -109,6 +112,66 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
 
+def parse_datetime(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+def apply_eq_filters(query, filters: Optional[dict] = None):
+    if not filters:
+        return query
+
+    for field, value in filters.items():
+        query = query.eq(field, value)
+    return query
+
+def fetch_rows(
+    table: str,
+    filters: Optional[dict] = None,
+    order_by: Optional[str] = None,
+    desc: bool = False,
+    limit: Optional[int] = None,
+    gte: Optional[dict] = None,
+    lte: Optional[dict] = None,
+):
+    query = db.table(table).select("*")
+    query = apply_eq_filters(query, filters)
+
+    if gte:
+        for field, value in gte.items():
+            query = query.gte(field, value)
+    if lte:
+        for field, value in lte.items():
+            query = query.lte(field, value)
+    if order_by:
+        query = query.order(order_by, desc=desc)
+    if limit:
+        query = query.limit(limit)
+
+    return query.execute().data or []
+
+def fetch_one(table: str, filters: dict):
+    rows = fetch_rows(table, filters=filters, limit=1)
+    return rows[0] if rows else None
+
+def insert_row(table: str, row: dict):
+    response = db.table(table).insert(row).execute()
+    return response.data[0] if response.data else row
+
+def update_rows(table: str, values: dict, filters: dict):
+    query = db.table(table).update(values)
+    query = apply_eq_filters(query, filters)
+    response = query.execute()
+    return response.data or []
+
+def delete_rows(table: str, filters: dict):
+    query = db.table(table).delete()
+    query = apply_eq_filters(query, filters)
+    response = query.execute()
+    return response.data or []
+
 # ============== AUTH HELPERS ==============
 
 async def get_current_user(request: Request) -> User:
@@ -118,27 +181,17 @@ async def get_current_user(request: Request) -> User:
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    session_doc = await db.user_sessions.find_one(
-        {"session_token": session_token},
-        {"_id": 0}
-    )
+    session_doc = fetch_one("user_sessions", {"session_token": session_token})
     
     if not session_doc:
         raise HTTPException(status_code=401, detail="Invalid session")
     
     # Check expiry
-    expires_at = session_doc["expires_at"]
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    expires_at = parse_datetime(session_doc["expires_at"])
     if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session expired")
     
-    user_doc = await db.users.find_one(
-        {"user_id": session_doc["user_id"]},
-        {"_id": 0}
-    )
+    user_doc = fetch_one("users", {"user_id": session_doc["user_id"]})
     
     if not user_doc:
         raise HTTPException(status_code=401, detail="User not found")
@@ -164,7 +217,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 async def create_user_session(user_id: str) -> str:
     session_token = f"session_{uuid.uuid4().hex}"
-    await db.user_sessions.insert_one({
+    insert_row("user_sessions", {
         "user_id": user_id,
         "session_token": session_token,
         "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
@@ -198,18 +251,19 @@ def build_auth_response(user_doc: dict) -> dict:
 async def register(auth: RegisterRequest, request: Request, response: Response):
     """Create a local account and session"""
     email = auth.email.lower().strip()
-    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+    existing_user = fetch_one("users", {"email": email})
 
     if existing_user and existing_user.get("password_hash"):
         raise HTTPException(status_code=400, detail="An account with this email already exists")
 
     if existing_user:
         password_hash = hash_password(auth.password)
-        await db.users.update_one(
+        update_rows(
+            "users",
+            {"name": auth.name.strip(), "password_hash": password_hash},
             {"user_id": existing_user["user_id"]},
-            {"$set": {"name": auth.name.strip(), "password_hash": password_hash}}
         )
-        user_doc = await db.users.find_one({"user_id": existing_user["user_id"]}, {"_id": 0})
+        user_doc = fetch_one("users", {"user_id": existing_user["user_id"]})
     else:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         user_doc = {
@@ -220,7 +274,7 @@ async def register(auth: RegisterRequest, request: Request, response: Response):
             "password_hash": hash_password(auth.password),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        await db.users.insert_one(user_doc)
+        insert_row("users", user_doc)
         await create_sample_data(user_id)
 
     session_token = await create_user_session(user_doc["user_id"])
@@ -233,7 +287,7 @@ async def register(auth: RegisterRequest, request: Request, response: Response):
 async def login(auth: LoginRequest, request: Request, response: Response):
     """Authenticate an existing local account"""
     email = auth.email.lower().strip()
-    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+    user_doc = fetch_one("users", {"email": email})
 
     if not user_doc or not user_doc.get("password_hash"):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -258,7 +312,7 @@ async def logout(request: Request, response: Response):
     """Logout user"""
     session_token = get_session_token_from_request(request)
     if session_token:
-        await db.user_sessions.delete_one({"session_token": session_token})
+        delete_rows("user_sessions", {"session_token": session_token})
     
     response.delete_cookie(key="session_token", path="/")
     return {"message": "Logged out successfully"}
@@ -293,7 +347,7 @@ async def create_sample_data(user_id: str):
             "date": txn["date"].isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        await db.transactions.insert_one(txn_doc)
+        insert_row("transactions", txn_doc)
     
     # Sample budgets
     budgets = [
@@ -313,7 +367,7 @@ async def create_sample_data(user_id: str):
             "period": "monthly",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        await db.budgets.insert_one(budget_doc)
+        insert_row("budgets", budget_doc)
 
 # ============== TRANSACTION ENDPOINTS ==============
 
@@ -343,7 +397,22 @@ async def get_transactions(
         else:
             query["date"] = {"$lte": end_date}
     
-    transactions = await db.transactions.find(query, {"_id": 0}).sort("date", -1).to_list(limit)
+    range_gte = {}
+    range_lte = {}
+    if start_date:
+        range_gte["date"] = start_date
+    if end_date:
+        range_lte["date"] = end_date
+
+    transactions = fetch_rows(
+        "transactions",
+        filters=query,
+        order_by="date",
+        desc=True,
+        limit=limit,
+        gte=range_gte or None,
+        lte=range_lte or None,
+    )
     return transactions
 
 @api_router.post("/transactions")
@@ -367,20 +436,20 @@ async def create_transaction(request: Request, txn: TransactionCreate):
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
-    await db.transactions.insert_one(txn_doc)
+    insert_row("transactions", txn_doc)
     
     # Update budget spent if expense
     if txn.type == "expense":
-        await db.budgets.update_one(
-            {"user_id": user.user_id, "category": txn.category},
-            {"$inc": {"spent": txn.amount}}
-        )
+        budget = fetch_one("budgets", {"user_id": user.user_id, "category": txn.category})
+        if budget:
+            update_rows(
+                "budgets",
+                {"spent": float(budget.get("spent", 0)) + txn.amount},
+                {"budget_id": budget["budget_id"]},
+            )
         
         # Check if budget exceeded and create alert
-        budget = await db.budgets.find_one(
-            {"user_id": user.user_id, "category": txn.category},
-            {"_id": 0}
-        )
+        budget = fetch_one("budgets", {"user_id": user.user_id, "category": txn.category})
         if budget and budget.get("spent", 0) > budget.get("limit", 0):
             alert_doc = {
                 "alert_id": f"alt_{uuid.uuid4().hex[:12]}",
@@ -390,7 +459,7 @@ async def create_transaction(request: Request, txn: TransactionCreate):
                 "read": False,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            await db.alerts.insert_one(alert_doc)
+            insert_row("alerts", alert_doc)
     
     # Create alert for large transactions
     if txn.amount >= 50000:
@@ -402,10 +471,8 @@ async def create_transaction(request: Request, txn: TransactionCreate):
             "read": False,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        await db.alerts.insert_one(alert_doc)
-    
-    if "_id" in txn_doc:
-        del txn_doc["_id"]
+        insert_row("alerts", alert_doc)
+
     return txn_doc
 
 @api_router.delete("/transactions/{transaction_id}")
@@ -413,12 +480,12 @@ async def delete_transaction(request: Request, transaction_id: str):
     """Delete a transaction"""
     user = await get_current_user(request)
     
-    result = await db.transactions.delete_one({
+    deleted = delete_rows("transactions", {
         "transaction_id": transaction_id,
         "user_id": user.user_id
     })
     
-    if result.deleted_count == 0:
+    if not deleted:
         raise HTTPException(status_code=404, detail="Transaction not found")
     
     return {"message": "Transaction deleted"}
@@ -429,7 +496,7 @@ async def delete_transaction(request: Request, transaction_id: str):
 async def get_budgets(request: Request):
     """Get user budgets"""
     user = await get_current_user(request)
-    budgets = await db.budgets.find({"user_id": user.user_id}, {"_id": 0}).to_list(100)
+    budgets = fetch_rows("budgets", filters={"user_id": user.user_id}, limit=100)
     return budgets
 
 @api_router.post("/budgets")
@@ -438,7 +505,7 @@ async def create_budget(request: Request, budget: BudgetCreate):
     user = await get_current_user(request)
     
     # Check if budget for category exists
-    existing = await db.budgets.find_one({
+    existing = fetch_one("budgets", {
         "user_id": user.user_id,
         "category": budget.category
     })
@@ -456,9 +523,7 @@ async def create_budget(request: Request, budget: BudgetCreate):
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
-    await db.budgets.insert_one(budget_doc)
-    if "_id" in budget_doc:
-        del budget_doc["_id"]
+    insert_row("budgets", budget_doc)
     return budget_doc
 
 @api_router.put("/budgets/{budget_id}")
@@ -466,12 +531,13 @@ async def update_budget(request: Request, budget_id: str, budget: BudgetCreate):
     """Update a budget"""
     user = await get_current_user(request)
     
-    result = await db.budgets.update_one(
+    updated = update_rows(
+        "budgets",
+        {"limit": budget.limit, "period": budget.period},
         {"budget_id": budget_id, "user_id": user.user_id},
-        {"$set": {"limit": budget.limit, "period": budget.period}}
     )
     
-    if result.matched_count == 0:
+    if not updated:
         raise HTTPException(status_code=404, detail="Budget not found")
     
     return {"message": "Budget updated"}
@@ -481,12 +547,12 @@ async def delete_budget(request: Request, budget_id: str):
     """Delete a budget"""
     user = await get_current_user(request)
     
-    result = await db.budgets.delete_one({
+    deleted = delete_rows("budgets", {
         "budget_id": budget_id,
         "user_id": user.user_id
     })
     
-    if result.deleted_count == 0:
+    if not deleted:
         raise HTTPException(status_code=404, detail="Budget not found")
     
     return {"message": "Budget deleted"}
@@ -497,10 +563,13 @@ async def delete_budget(request: Request, budget_id: str):
 async def get_alerts(request: Request):
     """Get user alerts"""
     user = await get_current_user(request)
-    alerts = await db.alerts.find(
-        {"user_id": user.user_id},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(50)
+    alerts = fetch_rows(
+        "alerts",
+        filters={"user_id": user.user_id},
+        order_by="created_at",
+        desc=True,
+        limit=50,
+    )
     return alerts
 
 @api_router.put("/alerts/{alert_id}/read")
@@ -508,10 +577,7 @@ async def mark_alert_read(request: Request, alert_id: str):
     """Mark alert as read"""
     user = await get_current_user(request)
     
-    await db.alerts.update_one(
-        {"alert_id": alert_id, "user_id": user.user_id},
-        {"$set": {"read": True}}
-    )
+    update_rows("alerts", {"read": True}, {"alert_id": alert_id, "user_id": user.user_id})
     
     return {"message": "Alert marked as read"}
 
@@ -520,10 +586,7 @@ async def mark_all_alerts_read(request: Request):
     """Mark all alerts as read"""
     user = await get_current_user(request)
     
-    await db.alerts.update_many(
-        {"user_id": user.user_id},
-        {"$set": {"read": True}}
-    )
+    update_rows("alerts", {"read": True}, {"user_id": user.user_id})
     
     return {"message": "All alerts marked as read"}
 
@@ -535,10 +598,7 @@ async def get_dashboard_stats(request: Request):
     user = await get_current_user(request)
     
     # Get all transactions
-    transactions = await db.transactions.find(
-        {"user_id": user.user_id},
-        {"_id": 0}
-    ).to_list(1000)
+    transactions = fetch_rows("transactions", filters={"user_id": user.user_id}, limit=1000)
     
     total_income = sum(t["amount"] for t in transactions if t["type"] == "income")
     total_expense = sum(t["amount"] for t in transactions if t["type"] == "expense")
@@ -588,10 +648,11 @@ async def get_dashboard_stats(request: Request):
         })
     
     # Get unread alerts count
-    unread_alerts = await db.alerts.count_documents({
+    unread_alert_rows = fetch_rows("alerts", filters={
         "user_id": user.user_id,
         "read": False
-    })
+    }, limit=1000)
+    unread_alerts = len(unread_alert_rows)
     
     return {
         "balance": balance,
@@ -694,10 +755,13 @@ async def export_transactions(request: Request, format: str = "csv"):
     """Export transactions as CSV"""
     user = await get_current_user(request)
     
-    transactions = await db.transactions.find(
-        {"user_id": user.user_id},
-        {"_id": 0}
-    ).sort("date", -1).to_list(1000)
+    transactions = fetch_rows(
+        "transactions",
+        filters={"user_id": user.user_id},
+        order_by="date",
+        desc=True,
+        limit=1000,
+    )
     
     if format == "csv":
         output = io.StringIO()
@@ -730,7 +794,7 @@ async def export_report(request: Request):
     user = await get_current_user(request)
     stats = await get_dashboard_stats(request)
     
-    budgets = await db.budgets.find({"user_id": user.user_id}, {"_id": 0}).to_list(100)
+    budgets = fetch_rows("budgets", filters={"user_id": user.user_id}, limit=100)
     
     output = io.StringIO()
     writer = csv.writer(output)
@@ -786,7 +850,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
