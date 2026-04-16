@@ -1,5 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
@@ -40,6 +40,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+REQUIRED_TABLES = ("users", "user_sessions", "transactions", "budgets", "alerts")
+
+
+class DatabaseAccessError(RuntimeError):
+    """Raised when a Supabase operation fails."""
 
 # ============== MODELS ==============
 
@@ -127,6 +132,16 @@ def apply_eq_filters(query, filters: Optional[dict] = None):
         query = query.eq(field, value)
     return query
 
+
+def run_db_query(table: str, action: str, operation):
+    try:
+        return operation()
+    except Exception as exc:
+        logger.exception("Database %s failed for table '%s'", action, table)
+        raise DatabaseAccessError(
+            "Database is unavailable. Check Supabase configuration and run the required schema migrations."
+        ) from exc
+
 def fetch_rows(
     table: str,
     filters: Optional[dict] = None,
@@ -150,27 +165,34 @@ def fetch_rows(
     if limit:
         query = query.limit(limit)
 
-    return query.execute().data or []
+    response = run_db_query(table, "select", query.execute)
+    return response.data or []
 
 def fetch_one(table: str, filters: dict):
     rows = fetch_rows(table, filters=filters, limit=1)
     return rows[0] if rows else None
 
 def insert_row(table: str, row: dict):
-    response = db.table(table).insert(row).execute()
+    response = run_db_query(table, "insert", lambda: db.table(table).insert(row).execute())
     return response.data[0] if response.data else row
 
 def update_rows(table: str, values: dict, filters: dict):
     query = db.table(table).update(values)
     query = apply_eq_filters(query, filters)
-    response = query.execute()
+    response = run_db_query(table, "update", query.execute)
     return response.data or []
 
 def delete_rows(table: str, filters: dict):
     query = db.table(table).delete()
     query = apply_eq_filters(query, filters)
-    response = query.execute()
+    response = run_db_query(table, "delete", query.execute)
     return response.data or []
+
+
+def assert_required_tables_ready(tables: tuple[str, ...] = REQUIRED_TABLES):
+    """Ensure the hosted Supabase project has the schema this app expects."""
+    for table in tables:
+        fetch_rows(table, limit=1)
 
 # ============== AUTH HELPERS ==============
 
@@ -250,6 +272,7 @@ def build_auth_response(user_doc: dict) -> dict:
 @api_router.post("/auth/register")
 async def register(auth: RegisterRequest, request: Request, response: Response):
     """Create a local account and session"""
+    assert_required_tables_ready()
     email = auth.email.lower().strip()
     existing_user = fetch_one("users", {"email": email})
 
@@ -838,10 +861,28 @@ async def root():
 
 @api_router.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    assert_required_tables_ready()
+    return {"status": "healthy", "database": "ok", "tables": list(REQUIRED_TABLES)}
 
 # Include the router in the main app
 app.include_router(api_router)
+
+
+@app.exception_handler(DatabaseAccessError)
+async def database_access_error_handler(request: Request, exc: DatabaseAccessError):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(Exception)
+async def unexpected_error_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled request failure for %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Unexpected server error. Check the backend logs for the full traceback."},
+    )
 
 app.add_middleware(
     CORSMiddleware,

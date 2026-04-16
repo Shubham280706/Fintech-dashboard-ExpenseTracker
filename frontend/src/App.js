@@ -258,7 +258,7 @@ const LandingPage = () => {
     } catch (error) {
       if (!error.response) {
         toast.error(
-          "Cannot reach the backend at http://localhost:8000. Start the backend and verify backend/.env has a valid Supabase service role key."
+          `Cannot reach the backend at ${BACKEND_URL}. Please try again in a moment.`
         );
       } else {
         toast.error(error.response?.data?.detail || "Authentication failed. Please try again.");
