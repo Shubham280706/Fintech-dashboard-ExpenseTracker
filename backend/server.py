@@ -298,7 +298,6 @@ async def register(auth: RegisterRequest, request: Request, response: Response):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         insert_row("users", user_doc)
-        await create_sample_data(user_id)
 
     session_token = await create_user_session(user_doc["user_id"])
     set_session_cookie(response, request, session_token)
@@ -339,58 +338,6 @@ async def logout(request: Request, response: Response):
     
     response.delete_cookie(key="session_token", path="/")
     return {"message": "Logged out successfully"}
-
-# ============== SAMPLE DATA ==============
-
-async def create_sample_data(user_id: str):
-    """Create sample transactions and budgets for new users"""
-    categories = ["Food & Dining", "Shopping", "Transport", "Bills", "Entertainment", "Salary", "Freelance"]
-    
-    # Sample transactions
-    transactions = [
-        {"type": "income", "category": "Salary", "amount": 75000, "description": "Monthly Salary", "date": datetime.now(timezone.utc) - timedelta(days=1)},
-        {"type": "expense", "category": "Food & Dining", "amount": 2500, "description": "Restaurant dinner", "date": datetime.now(timezone.utc) - timedelta(days=2)},
-        {"type": "expense", "category": "Shopping", "amount": 5000, "description": "Online shopping", "date": datetime.now(timezone.utc) - timedelta(days=3)},
-        {"type": "expense", "category": "Transport", "amount": 1500, "description": "Uber rides", "date": datetime.now(timezone.utc) - timedelta(days=4)},
-        {"type": "expense", "category": "Bills", "amount": 3000, "description": "Electricity bill", "date": datetime.now(timezone.utc) - timedelta(days=5)},
-        {"type": "income", "category": "Freelance", "amount": 15000, "description": "Freelance project", "date": datetime.now(timezone.utc) - timedelta(days=7)},
-        {"type": "expense", "category": "Entertainment", "amount": 1200, "description": "Movie tickets", "date": datetime.now(timezone.utc) - timedelta(days=8)},
-        {"type": "transfer", "category": "Transfer", "amount": 10000, "description": "Savings transfer", "recipient": "Savings Account", "date": datetime.now(timezone.utc) - timedelta(days=10)},
-    ]
-    
-    for txn in transactions:
-        txn_doc = {
-            "transaction_id": f"txn_{uuid.uuid4().hex[:12]}",
-            "user_id": user_id,
-            "type": txn["type"],
-            "category": txn["category"],
-            "amount": txn["amount"],
-            "description": txn["description"],
-            "recipient": txn.get("recipient"),
-            "date": txn["date"].isoformat(),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        insert_row("transactions", txn_doc)
-    
-    # Sample budgets
-    budgets = [
-        {"category": "Food & Dining", "limit": 10000, "spent": 2500},
-        {"category": "Shopping", "limit": 8000, "spent": 5000},
-        {"category": "Transport", "limit": 5000, "spent": 1500},
-        {"category": "Entertainment", "limit": 3000, "spent": 1200},
-    ]
-    
-    for budget in budgets:
-        budget_doc = {
-            "budget_id": f"bgt_{uuid.uuid4().hex[:12]}",
-            "user_id": user_id,
-            "category": budget["category"],
-            "limit": budget["limit"],
-            "spent": budget["spent"],
-            "period": "monthly",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        insert_row("budgets", budget_doc)
 
 # ============== TRANSACTION ENDPOINTS ==============
 
