@@ -278,11 +278,11 @@ const LandingPage = () => {
         className={`landing-nav ${navHidden ? "hidden" : ""}`}
         onMouseEnter={() => setNavHidden(false)}
       >
-        <div className="sidebar-logo">
-          <div className="sidebar-logo-icon">
-            <Wallet size={20} />
+        <div className="landing-logo">
+          <div className="landing-logo-icon">
+            <Wallet size={18} />
           </div>
-          <span className="sidebar-logo-text">MoneyHub</span>
+          <span className="landing-logo-text">MoneyHub</span>
         </div>
         <div className="landing-auth-switch">
           <button
@@ -301,130 +301,172 @@ const LandingPage = () => {
           </button>
         </div>
       </nav>
-      <div className="landing-nav-spacer" />
 
       <div className="landing-hero">
-        <div className="hero-content">
+        {/* Left — copy + form */}
+        <div className="hero-left">
+          <div className="hero-eyebrow">
+            <span className="hero-eyebrow-dot" />
+            Personal Finance Dashboard
+          </div>
           <h1 className="hero-title">
-            Your finances,
-            <br />
-            <span>simplified.</span>
+            Your finances,<br />
+            <span className="hero-title-gradient">simplified.</span>
           </h1>
           <p className="hero-subtitle">
-            Track transactions, manage budgets, monitor markets, and take control
-            of your financial future with a first-party dashboard that manages its
-            own secure sign-in.
+            Track transactions, manage budgets, monitor markets, and take full
+            control of your financial future — all in one place.
           </p>
+
           <div className="hero-features">
-            <div className="feature-badge">
-              <Check size={16} /> Transaction Tracking
-            </div>
-            <div className="feature-badge">
-              <Check size={16} /> Budget Management
-            </div>
-            <div className="feature-badge">
-              <Check size={16} /> Stock Market Data
-            </div>
-            <div className="feature-badge">
-              <Check size={16} /> Export Reports
-            </div>
+            {[
+              { icon: <ArrowUpDown size={14} />, label: "Transaction Tracking", color: "blue" },
+              { icon: <PiggyBank size={14} />, label: "Budget Management", color: "violet" },
+              { icon: <TrendingUp size={14} />, label: "Stock Market Data", color: "green" },
+              { icon: <Download size={14} />, label: "Export Reports", color: "orange" },
+            ].map(({ icon, label, color }) => (
+              <div className={`feature-pill feature-pill--${color}`} key={label}>
+                {icon}
+                {label}
+              </div>
+            ))}
           </div>
+
+          {/* Auth card */}
           <div className="auth-card" data-testid="auth-card">
-            <div className="auth-card-header">
-              <p className="auth-eyebrow">Built-in authentication</p>
+            <div className="auth-tab-row">
+              <button
+                type="button"
+                className={`auth-tab ${mode === "login" ? "active" : ""}`}
+                onClick={() => setMode("login")}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                className={`auth-tab ${mode === "register" ? "active" : ""}`}
+                onClick={() => setMode("register")}
+              >
+                Create Account
+              </button>
+            </div>
+
+            <div className="auth-card-body">
               <h2 className="auth-title">
-                {mode === "login" ? "Welcome back" : "Create your account"}
+                {mode === "login" ? "Welcome back" : "Get started free"}
               </h2>
               <p className="auth-description">
                 {mode === "login"
-                  ? "Use your MoneyHub email and password to open the dashboard."
-                  : "Create a local account and we will set up your starter financial data."}
+                  ? "Sign in to your MoneyHub account."
+                  : "Create your account in seconds."}
               </p>
-            </div>
 
-            <form className="auth-form" onSubmit={handleSubmit}>
-              {mode === "register" && (
+              <form className="auth-form" onSubmit={handleSubmit}>
+                {mode === "register" && (
+                  <div className="form-group">
+                    <Label className="form-label" htmlFor="name">Full Name</Label>
+                    <Input
+                      id="name"
+                      placeholder="Aarav Mehta"
+                      value={formData.name}
+                      onChange={updateField("name")}
+                      data-testid="register-name-input"
+                    />
+                  </div>
+                )}
                 <div className="form-group">
-                  <Label className="form-label" htmlFor="name">
-                    Full Name
-                  </Label>
+                  <Label className="form-label" htmlFor="email">Email</Label>
                   <Input
-                    id="name"
-                    placeholder="Aarav Mehta"
-                    value={formData.name}
-                    onChange={updateField("name")}
-                    data-testid="register-name-input"
+                    id="email"
+                    type="email"
+                    placeholder="you@example.com"
+                    value={formData.email}
+                    onChange={updateField("email")}
+                    data-testid="auth-email-input"
                   />
                 </div>
-              )}
-
-              <div className="form-group">
-                <Label className="form-label" htmlFor="email">
-                  Email
-                </Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={formData.email}
-                  onChange={updateField("email")}
-                  data-testid="auth-email-input"
-                />
-              </div>
-
-              <div className="form-group">
-                <Label className="form-label" htmlFor="password">
-                  Password
-                </Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="At least 8 characters"
-                  value={formData.password}
-                  onChange={updateField("password")}
-                  data-testid="auth-password-input"
-                />
-              </div>
-
-              <Button
-                type="submit"
-                className="btn-primary auth-submit"
-                disabled={submitting}
-                data-testid={mode === "login" ? "login-btn" : "register-btn"}
-              >
-                {submitting
-                  ? "Please wait..."
-                  : mode === "login"
-                    ? "Sign In"
-                    : "Create Account"}
-                <ArrowUpRight size={18} />
-              </Button>
-            </form>
+                <div className="form-group">
+                  <Label className="form-label" htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={formData.password}
+                    onChange={updateField("password")}
+                    data-testid="auth-password-input"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="auth-submit-btn"
+                  disabled={submitting}
+                  data-testid={mode === "login" ? "login-btn" : "register-btn"}
+                >
+                  {submitting ? "Please wait…" : mode === "login" ? "Sign In" : "Create Account"}
+                  <ArrowUpRight size={16} />
+                </Button>
+              </form>
+            </div>
           </div>
         </div>
-        <div
-          style={{
-            width: "500px",
-            height: "400px",
-            background: "linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%)",
-            borderRadius: "16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "1px solid #E5E7EB",
-          }}
-        >
-          <div style={{ textAlign: "center", color: "#4F46E5" }}>
-            <TrendingUp size={80} strokeWidth={1.5} />
-            <p
-              style={{
-                marginTop: "1rem",
-                fontWeight: 600,
-                fontSize: "1.125rem",
-              }}
-            >
-              Financial Dashboard Preview
-            </p>
+
+        {/* Right — visual preview */}
+        <div className="hero-right">
+          <div className="preview-card">
+            <div className="preview-header">
+              <div className="preview-dot red" /><div className="preview-dot yellow" /><div className="preview-dot green" />
+              <span className="preview-header-label">MoneyHub Dashboard</span>
+            </div>
+            <div className="preview-stats">
+              <div className="preview-stat-card blue">
+                <div className="preview-stat-label">Balance</div>
+                <div className="preview-stat-value">₹1,24,500</div>
+                <div className="preview-stat-change positive"><TrendingUp size={11} /> +8.2%</div>
+              </div>
+              <div className="preview-stat-card green">
+                <div className="preview-stat-label">Income</div>
+                <div className="preview-stat-value">₹90,000</div>
+                <div className="preview-stat-change positive"><TrendingUp size={11} /> This month</div>
+              </div>
+              <div className="preview-stat-card red">
+                <div className="preview-stat-label">Expenses</div>
+                <div className="preview-stat-value">₹42,300</div>
+                <div className="preview-stat-change negative"><TrendingDown size={11} /> This month</div>
+              </div>
+            </div>
+            <div className="preview-chart-area">
+              <div className="preview-chart-label">Spending Trend</div>
+              <div className="preview-bars">
+                {[40, 65, 45, 80, 55, 70, 50].map((h, i) => (
+                  <div key={i} className="preview-bar-wrap">
+                    <div className="preview-bar" style={{ height: `${h}%` }} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="preview-txn-list">
+              {[
+                { icon: "🛒", label: "Groceries", amt: "-₹1,200", color: "red" },
+                { icon: "💼", label: "Salary", amt: "+₹75,000", color: "green" },
+                { icon: "🚗", label: "Transport", amt: "-₹850", color: "red" },
+              ].map(({ icon, label, amt, color }) => (
+                <div className="preview-txn" key={label}>
+                  <span className="preview-txn-icon">{icon}</span>
+                  <span className="preview-txn-label">{label}</span>
+                  <span className={`preview-txn-amt ${color}`}>{amt}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* floating badges */}
+          <div className="hero-float-badge badge-top">
+            <Check size={13} />
+            Secure &amp; Private
+          </div>
+          <div className="hero-float-badge badge-bottom">
+            <TrendingUp size={13} />
+            Real-time data
           </div>
         </div>
       </div>
